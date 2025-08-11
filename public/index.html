@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Murder Mystery</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <div class="app">
+    <header class="stack">
+      <h1>MURDER MYSTERY</h1>
+      <p class="subtle">web multiplayer • monochrome ui</p>
+    </header>
+
+    <section id="lobby-ui" class="grid-2">
+      <div class="panel">
+        <h2>CREATE</h2>
+        <label class="field">
+          <span>name</span>
+          <input id="name-create" placeholder="HOST"/>
+        </label>
+        <button id="btn-create">CREATE ROOM</button>
+      </div>
+
+      <div class="panel">
+        <h2>JOIN</h2>
+        <label class="field">
+          <span>name</span>
+          <input id="name-join" placeholder="PLAYER"/>
+        </label>
+        <label class="field">
+          <span>code</span>
+          <input id="code-join" placeholder="ABCD" maxlength="4"/>
+        </label>
+        <button id="btn-join">JOIN ROOM</button>
+      </div>
+    </section>
+
+    <section id="room-ui" class="hidden stack">
+      <div class="grid-2">
+        <div class="panel">
+          <h2>ROOM</h2>
+          <div class="kv"><span>code</span><strong id="room-code">----</strong></div>
+          <div class="kv"><span>phase</span><strong id="phase">LOBBY</strong></div>
+          <div class="kv"><span>timer</span><strong id="timer">—</strong></div>
+          <div id="host-controls" class="row gap">
+            <button id="btn-start">START</button>
+            <button id="btn-advance" title="host-only manual advance">ADVANCE</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>PLAYERS</h2>
+          <ul id="players" class="list"></ul>
+        </div>
+      </div>
+
+      <div id="secret" class="panel hidden">
+        <h2>ROLE</h2>
+        <div class="role-wrap">
+          <div class="role" id="role">UNKNOWN</div>
+        </div>
+
+        <div id="night-actions" class="actions hidden">
+          <label class="field inline">
+            <span>target</span>
+            <select id="night-target"></select>
+          </label>
+          <button id="btn-night-action">SUBMIT</button>
+        </div>
+      </div>
+
+      <div id="day-chat" class="panel hidden">
+        <h2>DAY CHAT</h2>
+        <div id="chat-log" class="log"></div>
+        <div class="row gap">
+          <input id="chat-input" placeholder="type and send"/>
+          <button id="btn-chat">SEND</button>
+        </div>
+      </div>
+
+      <div id="vote-ui" class="panel hidden">
+        <h2>VOTE</h2>
+        <label class="field inline">
+          <span>target</span>
+          <select id="vote-target"></select>
+        </label>
+        <button id="btn-vote">CAST VOTE</button>
+      </div>
+
+      <div class="panel">
+        <h2>EVENTS</h2>
+        <div id="system-log" class="log"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    let state = { code:null, you:null, host:false, phase:'LOBBY', players:[], role:null };
+
+    // Elements
+    const lobbyUI = document.getElementById('lobby-ui');
+    const roomUI = document.getElementById('room-ui');
+    const roomCode = document.getElementById('room-code');
+    const phaseEl = document.getElementById('phase');
+    const playersEl = document.getElementById('players');
+    const hostControls = document.getElementById('host-controls');
+    const btnStart = document.getElementById('btn-start');
+    const btnAdvance = document.getElementById('btn-advance');
+    const systemLog = document.getElementById('system-log');
+    const secret = document.getElementById('secret');
+    const roleEl = document.getElementById('role');
+    const nightActions = document.getElementById('night-actions');
+    const nightTarget = document.getElementById('night-target');
+    const btnNight = document.getElementById('btn-night-action');
+    const dayChat = document.getElementById('day-chat');
+    const chatLog = document.getElementById('chat-log');
+    const chatInput = document.getElementById('chat-input');
+    const btnChat = document.getElementById('btn-chat');
+    const voteUI = document.getElementById('vote-ui');
+    const voteTarget = document.getElementById('vote-target');
+    const btnVote = document.getElementById('btn-vote');
+    const timerEl = document.getElementById('timer');
+
+    // Create/Join
+    document.getElementById('btn-create').onclick = ()=>{
+      const name = document.getElementById('name-create').value.trim() || 'HOST';
+      socket.emit('create_room', { name });
+    };
+    document.getElementById('btn-join').onclick = ()=>{
+      const name = document.getElementById('name-join').value.trim() || 'PLAYER';
+      const code = (document.getElementById('code-join').value || '').toUpperCase().trim();
+      socket.emit('join_room', { name, code });
+    };
+
+    // Host
+    btnStart.onclick = ()=> socket.emit('start_game', { code: state.code });
+    btnAdvance.onclick = ()=> socket.emit('advance', { code: state.code });
+
+    // Night action
+    btnNight.onclick = ()=>{
+      const target = nightTarget.value;
+      socket.emit('night_action', { code: state.code, target });
+    };
+
+    // Chat
+    btnChat.onclick = ()=>{
+      const msg = chatInput.value.trim();
+      if (!msg) return;
+      socket.emit('day_chat', { code: state.code, message: msg });
+      chatInput.value = '';
+    };
+
+    // Vote
+    btnVote.onclick = ()=>{
+      const target = voteTarget.value || null;
+      socket.emit('vote', { code: state.code, target });
+    };
+
+    // Inbound
+    socket.on('room_joined', ({ code, you, host })=>{
+      state.code = code; state.you = you; state.host = !!host;
+      lobbyUI.classList.add('hidden');
+      roomUI.classList.remove('hidden');
+      roomCode.textContent = code;
+      systemLog.innerHTML = '';
+    });
+
+    socket.on('room_state', ({ phase, players })=>{
+      state.phase = phase; state.players = players;
+      phaseEl.textContent = phase;
+      hostControls.classList.toggle('hidden', !state.host || phase !== 'LOBBY');
+
+      // Players
+      playersEl.innerHTML = '';
+      const alive = players.filter(p=>p.alive);
+      const dead = players.filter(p=>!p.alive);
+      for (const p of alive) {
+        const li = document.createElement('li');
+        li.textContent = `${p.name}${p.id===state.you?' (you)':''}${p.voteFor ? ' -> '+nameOf(p.voteFor, players) : ''}`;
+        playersEl.appendChild(li);
+      }
+      if (dead.length){
+        const hr = document.createElement('hr'); playersEl.appendChild(hr);
+        for (const p of dead){
+          const li = document.createElement('li');
+          li.textContent = `x ${p.name}`;
+          li.className = 'muted';
+          playersEl.appendChild(li);
+        }
+      }
+
+      // Phase UI
+      dayChat.classList.toggle('hidden', phase!=='DAY');
+      voteUI.classList.toggle('hidden', phase!=='VOTE');
+      nightActions.classList.toggle('hidden', !(state.role==='MURDERER'||state.role==='DETECTIVE'||state.role==='DOCTOR') || phase!=='NIGHT');
+
+      // Targets
+      const targetable = players.filter(p=>p.alive && p.id!==state.you);
+      fillSelect(nightTarget, targetable);
+      fillSelect(voteTarget, players.filter(p=>p.alive));
+    });
+
+    socket.on('role_assignment', ({ role })=>{
+      state.role = role;
+      secret.classList.remove('hidden');
+      roleEl.textContent = role;
+    });
+
+    socket.on('inspect_result', ({ target, alignment })=>{
+      pushSystem(`detective:${nameOf(target, state.players)}=${alignment}`);
+    });
+
+    socket.on('chat_message', ({ from, message })=>{
+      const div = document.createElement('div');
+      div.textContent = `${from}: ${message}`;
+      chatLog.appendChild(div);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    });
+
+    socket.on('system_message', (msg)=> pushSystem(msg));
+    socket.on('error_message', (msg)=> pushSystem(`error:${msg}`));
+
+    // Timer display (client-side only; server is authoritative)
+    let timerInt = null;
+    socket.on('room_state', ()=>{
+      if (timerInt) clearInterval(timerInt);
+      timerEl.textContent = '—';
+    });
+
+    function pushSystem(msg){
+      const div = document.createElement('div');
+      div.textContent = msg;
+      systemLog.appendChild(div);
+      systemLog.scrollTop = systemLog.scrollHeight;
+    }
+    function fillSelect(sel, items){
+      sel.innerHTML = '';
+      const opt = document.createElement('option'); opt.value=''; opt.text='(none)';
+      sel.appendChild(opt);
+      for (const p of items){
+        const o = document.createElement('option');
+        o.value = p.id; o.text = p.name;
+        sel.appendChild(o);
+      }
+    }
+    function nameOf(id, list){ return (list.find(p=>p.id===id)||{}).name || 'Unknown'; }
+  </script>
+</body>
+</html>
